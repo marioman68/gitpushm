@@ -5,7 +5,7 @@
 # Styled with a sleek purple/magenta TUI, mouse support, and universal DE file open
 # ==============================================================================
 
-VERSION="1.2.1"
+VERSION="1.2.2"
 PROJECTS_DIR="$HOME/Projects"
 
 # Color Palette Definitions
@@ -293,7 +293,7 @@ push_project_flow() {
     fi
 
     echo -e "${C_CYAN}[ INFO ] Pushing to remote origin...${C_RESET}"
-    if git push -u origin main 2>/dev/null || git push; then
+    if git push -u origin HEAD; then
         echo -e "\n${C_GREEN}${C_BOLD}[  OK  ] Push workflow completed for ${pname}!${C_RESET}"
     else
         echo -e "\n${C_RED}${C_BOLD}[ FAIL ] Push failed. Check your remote configuration.${C_RESET}"
@@ -468,7 +468,7 @@ while true; do
         [Oo])
             prompt_in_dialog "Enter project number to open: "
             read -r proj_num
-            if [[ "$proj_num" =~ ^[0-9]+$ ]] && [ "$proj_num" -ge 1 ] && [ "$proj_num" -le "$project_count" ]; then
+            if [[ "$proj_num" =~ ^[0-9]+$ ]] && [ "$proj_num" -ge 1 ]] && [ "$proj_num" -le "$project_count" ]; then
                 open_project_folder $(( proj_num - 1 ))
             else
                 temp_message "[ FAIL ] Invalid selection."
@@ -491,7 +491,7 @@ while true; do
             read -r
             ;;
         *)
-            if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le "$project_count" ]; then
+            if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ]] && [ "$choice" -le "$project_count" ]; then
                 push_project_flow $(( choice - 1 ))
             fi
             ;;
