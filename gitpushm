@@ -5,7 +5,7 @@
 # Styled with a sleek purple/magenta TUI, mouse support, and universal DE file open
 # ==============================================================================
 
-VERSION="1.2.2"
+VERSION="1.2.3"
 PROJECTS_DIR="$HOME/Projects"
 
 # Color Palette Definitions
@@ -423,7 +423,7 @@ while true; do
                         if [ "$btn" -eq 0 ] && [ "$action" == "M" ]; then
                             if [ "$side" == "L" ]; then
                                 clicked_idx=$(( cy - ROW_TWIN_START ))
-                                if [ "$clicked_idx" -lt "$project_count" ]; then
+                                if [ "$clicked_idx" -ge 0 ] && [ "$clicked_idx" -lt "$project_count" ]; then
                                     choice="$(( clicked_idx + 1 ))"
                                     break
                                 fi
@@ -468,7 +468,7 @@ while true; do
         [Oo])
             prompt_in_dialog "Enter project number to open: "
             read -r proj_num
-            if [[ "$proj_num" =~ ^[0-9]+$ ]] && [ "$proj_num" -ge 1 ]] && [ "$proj_num" -le "$project_count" ]; then
+            if [[ "$proj_num" =~ ^[0-9]+$ ]] && [ "$proj_num" -ge 1 ] && [ "$proj_num" -le "$project_count" ]; then
                 open_project_folder $(( proj_num - 1 ))
             else
                 temp_message "[ FAIL ] Invalid selection."
@@ -491,7 +491,7 @@ while true; do
             read -r
             ;;
         *)
-            if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ]] && [ "$choice" -le "$project_count" ]; then
+            if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le "$project_count" ]; then
                 push_project_flow $(( choice - 1 ))
             fi
             ;;
