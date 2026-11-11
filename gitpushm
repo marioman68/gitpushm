@@ -2,11 +2,46 @@
 
 # ==============================================================================
 # Project Hub / Git Push Manager (gitpushm)
-# Styled with a sleek purple/magenta TUI, mouse support, and universal DE file open
+# Styled with a sleek purple/magenta TUI, mouse support, and path configuration
 # ==============================================================================
 
-VERSION="1.2.3"
-PROJECTS_DIR="$HOME/Projects"
+VERSION="1.3.3"
+CONFIG_FILE="$HOME/.config/gitpushm.conf"
+
+expand_path() {
+    local p="$1"
+    # Safely expand leading tilde (~) to $HOME
+    p="${p/#\~/$HOME}"
+    # Remove trailing slash if present
+    echo "${p%/}"
+}
+
+configure_path() {
+    clear
+    echo -e "\e[38;5;213m\e[1m◆ GIT PROJECT PUSH MANAGER CONFIGURATION\e[0m\n"
+    local current_dir="${PROJECTS_DIR:-$HOME/Projects}"
+    echo -e "\e[38;5;244m(Tip: Press [Tab] to auto-complete folder paths)\e[0m"
+    read -erp "Enter projects folder path [Default: $current_dir]: " new_path
+
+    if [ -z "$new_path" ]; then
+        PROJECTS_DIR=$(expand_path "$current_dir")
+    else
+        PROJECTS_DIR=$(expand_path "$new_path")
+    fi
+
+    mkdir -p "$(dirname "$CONFIG_FILE")"
+    echo "$PROJECTS_DIR" > "$CONFIG_FILE"
+    echo -e "\n\e[38;5;82m[ OK ] Path set to: $PROJECTS_DIR\e[0m"
+    sleep 1
+}
+
+# Load or configure custom projects path
+if [ -f "$CONFIG_FILE" ]; then
+    raw_path=$(cat "$CONFIG_FILE")
+    PROJECTS_DIR=$(expand_path "$raw_path")
+else
+    configure_path
+fi
 
 # Color Palette Definitions
 C_RESET="\e[0m"
@@ -127,7 +162,7 @@ draw_wireframe() {
 
 draw_left_legend() {
     printf "\e[%d;%dH   ${C_GREEN}●${C_RESET} Uncommitted   ${C_MUTED}○${C_RESET} Clean   ${C_RED}○${C_RESET} Not a Git Repo" "$ROW_LEGEND_TEXT_1" "$(( LEFT_START + 1 ))"
-    printf "\e[%d;%dH   Press [q] to exit console" "$ROW_LEGEND_TEXT_2" "$(( LEFT_START + 1 ))"
+    printf "\e[%d;%dH   Press [c] to change path, [q] to exit" "$ROW_LEGEND_TEXT_2" "$(( LEFT_START + 1 ))"
 }
 
 temp_message() {
@@ -188,12 +223,12 @@ render_right_pane() {
     local act_idx=$(( row - ROW_TWIN_START ))
 
     local bg=""
-    [ "$is_hover" -eq 1 ] && [ "$act_idx" -ge 0 ] && [ "$act_idx" -le 4 ] && bg="${BG_HOVER}"
+    [ "$is_hover" -eq 1 ] && [ "$act_idx" -ge 0 ] && [ "$act_idx" -le 5 ] && bg="${BG_HOVER}"
 
     local col_start=$(( RIGHT_START + 1 ))
     printf "\e[%d;%dH" "$row" "$col_start"
 
-    if [ "$act_idx" -ge 0 ] && [ "$act_idx" -le 4 ]; then
+    if [ "$act_idx" -ge 0 ] && [ "$act_idx" -le 5 ]; then
         local p1=""
         local p2=""
         local raw_text=""
@@ -201,9 +236,10 @@ render_right_pane() {
         case "$act_idx" in
             0) p1="${C_GREEN}[p]${C_RESET}${bg}"; p2="   Push project to GitHub"; raw_text="  [p]   Push project to GitHub" ;;
             1) p1="${C_CYAN}[o]${C_RESET}${bg}"; p2="   Open folder in File Manager"; raw_text="  [o]   Open folder in File Manager" ;;
-            2) p1="${C_BLUE}[r]${C_RESET}${bg}"; p2="   Refresh project list"; raw_text="  [r]   Refresh project list" ;;
-            3) p1="${C_YELLOW}[s]${C_RESET}${bg}"; p2="   Git Status check"; raw_text="  [s]   Git Status check" ;;
-            4) p1="${C_RED}[q]${C_RESET}${bg}"; p2="   Exit Console"; raw_text="  [q]   Exit Console" ;;
+            2) p1="${C_PURPLE}[c]${C_RESET}${bg}"; p2="   Configure projects path"; raw_text="  [c]   Configure projects path" ;;
+            3) p1="${C_BLUE}[r]${C_RESET}${bg}"; p2="   Refresh project list"; raw_text="  [r]   Refresh project list" ;;
+            4) p1="${C_YELLOW}[s]${C_RESET}${bg}"; p2="   Git Status check"; raw_text="  [s]   Git Status check" ;;
+            5) p1="${C_RED}[q]${C_RESET}${bg}"; p2="   Exit Console"; raw_text="  [q]   Exit Console" ;;
         esac
 
         local text_len=${#raw_text}
@@ -253,7 +289,7 @@ push_project_flow() {
             read -r remote_choice
             if [[ "$remote_choice" =~ ^[Yy]$ ]]; then
                 echo -ne "${C_YELLOW}[ INPUT ] Enter remote URL: ${C_RESET}"
-                read -r remote_url
+                read -erp "" remote_url
                 if [ -n "$remote_url" ]; then
                     git remote add origin "$remote_url"
                     echo -e "${C_GREEN}[  OK  ] Remote origin added!${C_RESET}\n"
@@ -282,7 +318,7 @@ push_project_flow() {
         fi
     else
         echo -ne "${C_YELLOW}[INPUT] Enter commit message: ${C_RESET}"
-        read -r commit_msg
+        read -erp "" commit_msg
         [ -z "$commit_msg" ] && commit_msg="Update project files via gitpushm"
 
         echo -e "\n${C_CYAN}[ INFO ] Staging changes...${C_RESET}"
@@ -333,15 +369,18 @@ while true; do
 
     draw_wireframe
 
+    display_path="${PROJECTS_DIR/#$HOME/\~}"
+    [ ${#display_path} -gt 25 ] && display_path="…${display_path: -24}"
+
     printf "\e[2;3H${C_HEADER}${C_BOLD}◆ GIT PROJECT PUSH MANAGER${C_RESET}"
-    printf "\e[2;%dH${C_MUTED}Path: ~/Projects${C_RESET}" "$(( TOTAL_W - 19 ))"
+    printf "\e[2;%dH${C_MUTED}Path: %s${C_RESET}" "$(( TOTAL_W - ${#display_path} - 7 ))" "$display_path"
     printf "\e[2;%dH${C_BORDER}│${C_RESET}" "$TOTAL_W"
 
     printf "\e[%d;4H${C_CYAN}${C_BOLD} DETECTED DIRECTORIES (${project_count}) ${C_RESET}" "$ROW_TWIN_TOP"
     printf "\e[%d;%dH${C_HEADER}${C_BOLD} ACTION CENTER ${C_RESET}" "$ROW_TWIN_TOP" "$(( RIGHT_START + 3 ))"
 
     printf "\e[%d;4H${C_YELLOW}${C_BOLD} STATUS & QUICK LAUNCH ${C_RESET}" "$ROW_PROMPT_TOP"
-    printf "\e[%d;3HType project number, [p]ush, [o]pen, [s]tatus, or [q] to exit: \e[%d;%dH${C_BORDER}│${C_RESET}" \
+    printf "\e[%d;3HType index, [p]ush, [o]pen, [c]onfigure, [s]tatus, [q] exit: \e[%d;%dH${C_BORDER}│${C_RESET}" \
         "$ROW_PROMPT_INPUT" "$ROW_PROMPT_INPUT" "$TOTAL_W"
 
     for ((r=ROW_TWIN_START; r<=ROW_TWIN_END; r++)); do
@@ -431,9 +470,10 @@ while true; do
                                 case $(( cy - ROW_TWIN_START )) in
                                     0) choice="p"; break ;;
                                     1) choice="o"; break ;;
-                                    2) choice="r"; break ;;
-                                    3) choice="s"; break ;;
-                                    4) choice="q"; break ;;
+                                    2) choice="c"; break ;;
+                                    3) choice="r"; break ;;
+                                    4) choice="s"; break ;;
+                                    5) choice="q"; break ;;
                                 esac
                             fi
                         fi
@@ -452,6 +492,10 @@ while true; do
         [Qq])
             clear
             exit 0
+            ;;
+        [Cc])
+            disable_mouse
+            configure_path
             ;;
         [Rr])
             continue
