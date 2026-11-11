@@ -30,7 +30,7 @@ cd gitpushm
 chmod +x gitpushm
 cp gitpushm ~/.local/bin/gitpushm
 
-## Usage
+# Usage
 
 Simply run the command from any terminal:
 Bash
@@ -41,7 +41,7 @@ gitpushm
 
     Mouse: Click on a project row in the left pane to manage it, or click any option on the right.
 
-## Configuration
+# Configuration
 
 gitpushm automatically scans your local user directory located at:~/Projects/
 
