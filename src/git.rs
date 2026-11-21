@@ -123,6 +123,13 @@ pub fn log(repo: &Path, n: usize) -> Vec<Commit> {
     let o = git(repo, &["log", &format!("-n{n}"), "--pretty=format:%h%x1f%an%x1f%ar%x1f%s"]);
     o.stdout.lines().filter_map(|l| { let f: Vec<&str> = l.split('\x1f').collect(); if f.len() == 4 { Some(Commit { hash: f[0].into(), author: f[1].into(), when: f[2].into(), subject: f[3].into() }) } else { None } }).collect()
 }
+/// commits on this branch that the remote doesn't have yet: (short hash, full message), newest first
+pub fn outgoing(repo: &Path, has_upstream: bool) -> Vec<(String, String)> {
+    let range: Vec<&str> = if has_upstream { vec!["log", "@{u}..HEAD"] } else { vec!["log", "HEAD", "--not", "--remotes"] };
+    let mut args = range; args.extend(["-n50", "--format=%h%x1f%B%x1e"]);
+    let o = git(repo, &args); if !o.ok { return vec![]; }
+    o.stdout.split('\x1e').filter_map(|r| { let r = r.trim_start_matches('\n'); let (h, m) = r.split_once('\x1f')?; if h.is_empty() { None } else { Some((h.to_string(), m.trim_end().to_string())) } }).collect()
+}
 pub fn stash_count(repo: &Path) -> usize { git(repo, &["stash", "list"]).stdout.lines().count() }
 /// a browser address for the remote (GitHub, GitLab and friends), if it can be worked out
 pub fn web_url(remote: &str) -> Option<String> {

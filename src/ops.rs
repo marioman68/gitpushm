@@ -69,6 +69,10 @@ fn commit_only(repo: &Path, msg: &str, amend: bool, log: &mut Vec<String>) -> bo
     if !o.ok && o.text().contains("Please tell me who you are") { log.push("Git doesn't know your name yet. Run: git config --global user.name \"Your Name\" and git config --global user.email you@example.com".into()); }
     o.ok
 }
+/// change the message of the newest commit (only offered while it isn't pushed)
+pub fn reword(repo: &Path, msg: &str, log: &mut Vec<String>) -> bool {
+    let o = git::git(repo, &["commit", "--amend", "--allow-empty", "--only", "-m", msg]); log.push(o.text()); o.ok
+}
 pub fn push(repo: &Path, force: bool, log: &mut Vec<String>) -> bool {
     let args: Vec<&str> = if force { vec!["push", "--force-with-lease", "-u", "origin", "HEAD"] } else { vec!["push", "-u", "origin", "HEAD"] };
     let o = git::git(repo, &args); let t = o.text(); if !t.is_empty() { log.push(t.clone()); }

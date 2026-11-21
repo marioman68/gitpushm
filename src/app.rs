@@ -22,7 +22,7 @@ enum Msg { Scan(Vec<Repo>), Repo(Repo), Done { what: String, ok: bool, log: Vec<
 enum Tab { Changes, History }
 enum Dialog { ForcePush, Init, Remote(String), Discard(String, bool), Undo, NewBranch(String), About, Keys }
 enum Act {
-    Rescan(bool), Select(PathBuf), ShowDiff(String), Generate, Commit(bool), Push, Pull(bool), Fetch, Stash, Pop,
+    Rescan(bool), Select(PathBuf), ShowDiff(String), HideDiff, RewordPush(Option<String>), Generate, Commit(bool), Push, Pull(bool), Fetch, Stash, Pop,
     Checkout(String), Ignore(String, bool), OpenFile(String), OpenFolder, Terminal, Web, PickFolder, Quit, SaveCfg, Open(Dialog),
     DoForcePush, DoInit, DoRemote(String), DoDiscard(String, bool), DoUndo, DoNewBranch(String), Move(i32),
 }
@@ -33,6 +33,8 @@ pub struct App {
     msg: String, generated: String, amend: bool, tab: Tab, history: Vec<Commit>, branches: Vec<String>, stashes: usize,
     log: Vec<(String, u8)>, show_log: bool, status: String, busy: Option<String>,
     tx: Sender<Msg>, rx: Receiver<Msg>, dialog: Option<Dialog>, was_focused: bool, focus_search: bool, regen_needed: bool,
+    /// unpushed commits (hash, message) and the editable copy of the newest one's message
+    outgoing: Vec<(String, String)>, reword: String, reword_for: String,
 }
 
 impl App {
@@ -54,7 +56,7 @@ impl App {
         let mut a = App { cfg, repos: vec![], sel: None, search: String::new(), only_changed: false, scanning: false,
             checked: HashSet::new(), known: HashSet::new(), diff_for: None, diff: String::new(), msg: String::new(), generated: String::new(), amend: false,
             tab: Tab::Changes, history: vec![], branches: vec![], stashes: 0, log: vec![], show_log: false, status: "Ready".into(), busy: None,
-            tx, rx, dialog: None, was_focused: true, focus_search: false, regen_needed: false };
+            tx, rx, dialog: None, was_focused: true, focus_search: false, regen_needed: false, outgoing: vec![], reword: String::new(), reword_for: String::new() };
         let fetch = a.cfg.fetch_on_start; a.rescan(ctx, fetch);
         a
     }
@@ -95,6 +97,8 @@ impl App {
         self.checked.retain(|p| paths.contains(p)); self.known = paths;
         match self.diff_for.clone() { Some(d) if self.known.contains(&d) => self.load_diff(&d), Some(_) => { self.diff_for = None; self.diff.clear(); } None => {} }
         self.history = git::log(&r.path, 200); self.branches = git::branches(&r.path); self.stashes = git::stash_count(&r.path);
+        self.outgoing = if r.remote.is_some() && !st.no_commits { git::outgoing(&r.path, st.upstream.is_some()) } else { vec![] };
+        match self.outgoing.first() { Some((h, m)) if *h != self.reword_for => { self.reword_for = h.clone(); self.reword = m.clone(); } None => { self.reword_for.clear(); self.reword.clear(); } _ => {} }
         if self.cfg.autofill && (self.msg.trim().is_empty() || self.msg == self.generated) { self.regen(); }
     }
     fn chosen(&self) -> Vec<Change> { self.cur().and_then(|r| r.status.as_ref()).map(|s| s.changes.iter().filter(|c| self.checked.contains(&c.path)).cloned().collect()).unwrap_or_default() }
@@ -145,6 +149,11 @@ impl App {
             Act::Select(p) => self.select(p),
             Act::Move(d) => { let v = self.visible(); if v.is_empty() { return; } let at = v.iter().position(|&i| Some(&self.repos[i].path) == self.sel.as_ref()); let n = match at { Some(k) => (k as i32 + d).clamp(0, v.len() as i32 - 1) as usize, None => 0 }; let p = self.repos[v[n]].path.clone(); self.select(p); }
             Act::ShowDiff(p) => { self.diff_for = Some(p.clone()); self.load_diff(&p); }
+            Act::HideDiff => { self.diff_for = None; self.diff.clear(); }
+            Act::RewordPush(m) => {
+                if self.cur().map_or(false, |r| r.remote.is_none()) { self.dialog = Some(Dialog::Remote(String::new())); return; }
+                self.job(ctx, if m.is_some() { "Update message & push" } else { "Push" }, move |p, log| m.map_or(true, |m| ops::reword(p, &m, log)) && ops::push(p, false, log));
+            }
             Act::Generate => self.regen(),
             Act::Commit(push) => self.do_commit(ctx, push),
             Act::Push => { if self.cur().map_or(false, |r| r.remote.is_none()) { self.dialog = Some(Dialog::Remote(String::new())); } else { self.job(ctx, "Push", |p, log| ops::push(p, false, log)); } }
@@ -467,6 +476,7 @@ impl App {
             });
             match self.tab {
                 Tab::History => self.history_view(ui, st.ahead as usize),
+                Tab::Changes if st.changes.is_empty() && !self.outgoing.is_empty() => self.outgoing_view(ui, &r, &st, acts),
                 Tab::Changes if st.changes.is_empty() => {
                     ui.add_space(30.0);
                     ui.vertical_centered(|ui| {
@@ -489,15 +499,6 @@ impl App {
         let idle = self.busy.is_none();
         egui::TopBottomPanel::bottom("commitbox").show_separator_line(true).show_inside(ui, |ui| {
             ui.add_space(6.0);
-            let subj = self.msg.lines().next().map(|l| l.chars().count()).unwrap_or(0);
-            ui.horizontal(|ui| {
-                ui.label(RichText::new("Commit message").strong());
-                ui.label(RichText::new(format!("{subj}/72")).small().color(if subj > 72 { ORANGE } else { ui.visuals().weak_text_color() })).on_hover_text("Length of the first line; keep it under 72");
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| { if ui.small_button("Generate").on_hover_text("Write a message from the ticked files (Ctrl+G)").clicked() { acts.push(Act::Generate); } });
-            });
-            egui::ScrollArea::vertical().id_salt("msgscroll").max_height(118.0).min_scrolled_height(118.0).show(ui, |ui| {
-                ui.add(egui::TextEdit::multiline(&mut self.msg).desired_rows(6).desired_width(f32::INFINITY).font(egui::TextStyle::Monospace).hint_text("Leave empty and it is written for you — or type a summary and the change description is added under it"));
-            });
             let chosen = self.chosen();
             let risky: Vec<String> = chosen.iter().filter(|c| commitmsg::risky(c).is_some()).map(|c| c.path.clone()).collect();
             if !risky.is_empty() { ui.colored_label(ORANGE, format!("⚠ Ticked file{} that look risky: {}", if risky.len() == 1 { "" } else { "s" }, risky.join(", "))); }
@@ -513,7 +514,7 @@ impl App {
             });
             ui.add_space(6.0);
         });
-        egui::TopBottomPanel::top("files").resizable(true).default_height(190.0).height_range(70.0..=600.0).show_inside(ui, |ui| {
+        egui::TopBottomPanel::top("files").resizable(true).default_height(150.0).height_range(70.0..=600.0).show_inside(ui, |ui| {
             let n = st.changes.len(); let k = self.checked.len();
             ui.horizontal(|ui| {
                 let mut all = k == n;
@@ -545,12 +546,83 @@ impl App {
             });
         });
         egui::CentralPanel::default().show_inside(ui, |ui| {
-            match &self.diff_for {
-                None => { ui.centered_and_justified(|ui| ui.label(RichText::new("Click a file to see what changed").weak())); }
-                Some(_) => { let job = diff_job(&self.diff, ui); egui::ScrollArea::both().auto_shrink([false; 2]).show(ui, |ui| { ui.add(egui::Label::new(job).extend()); }); }
+            match self.diff_for.clone() {
+                // the message that will be committed, big and editable
+                None => {
+                    let subj = self.msg.lines().next().map(|l| l.chars().count()).unwrap_or(0);
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new("Commit message").strong());
+                        ui.label(RichText::new(format!("first line {subj}/72")).small().color(if subj > 72 { ORANGE } else { ui.visuals().weak_text_color() })).on_hover_text("Keep the first line under 72 characters");
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            if ui.small_button("Write it for me").on_hover_text("Replace the text with a message written from the ticked files (Ctrl+G)").clicked() { acts.push(Act::Generate); }
+                        });
+                    });
+                    let edited = !self.msg.trim().is_empty() && self.msg != self.generated;
+                    let single = !self.msg.trim().is_empty() && !self.msg.trim().contains('\n');
+                    let note = if self.msg.trim().is_empty() { "Empty: a message is written for you when you commit." }
+                        else if single && self.cfg.describe { "A description of the changes will be added under your summary when you commit." }
+                        else if edited { "Your edited message is used as shown." } else { "Written from the ticked files. Edit anything you like; this is exactly what gets committed." };
+                    ui.label(RichText::new(note).small().weak());
+                    egui::ScrollArea::vertical().id_salt("msgscroll").auto_shrink([false; 2]).show(ui, |ui| {
+                        let h = ui.available_height().max(80.0);
+                        ui.add_sized([ui.available_width(), h], egui::TextEdit::multiline(&mut self.msg).font(egui::TextStyle::Monospace)
+                            .hint_text("Type a message, or leave it empty and one is written for you"));
+                    });
+                }
+                Some(path) => {
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(&path).strong().monospace());
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| { if ui.button("Back to message").clicked() { acts.push(Act::HideDiff); } });
+                    });
+                    let job = diff_job(&self.diff, ui);
+                    egui::ScrollArea::both().auto_shrink([false; 2]).show(ui, |ui| { ui.add(egui::Label::new(job).extend()); });
+                }
             }
         });
         let _ = r;
+    }
+
+    /// clean tree with commits the remote doesn't have: show them, newest one's message editable, then push
+    fn outgoing_view(&mut self, ui: &mut egui::Ui, r: &Repo, st: &git::Status, acts: &mut Vec<Act>) {
+        let idle = self.busy.is_none(); let n = self.outgoing.len();
+        let changed = self.outgoing.first().map_or(false, |(_, m)| self.reword.trim() != m.trim()) && !self.reword.trim().is_empty();
+        egui::TopBottomPanel::bottom("pushbar").show_separator_line(true).show_inside(ui, |ui| {
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                if changed { ui.label(RichText::new("The edited message is saved to the commit, then pushed.").weak()); }
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    let label = if changed { "Save message & Push" } else { "Push" };
+                    if ui.add_enabled(idle && r.remote.is_some(), Button::new(RichText::new(label).color(Color32::WHITE).strong()).fill(ACCENT).min_size(Vec2::new(0.0, 24.0))).on_hover_text(format!("Send {n} commit{} to {}", if n == 1 { "" } else { "s" }, st.upstream.clone().unwrap_or_else(|| "the remote".into()))).clicked() {
+                        acts.push(Act::RewordPush(if changed { Some(self.reword.trim().to_string()) } else { None }));
+                    }
+                    if changed && ui.button("Undo edit").clicked() { if let Some((_, m)) = self.outgoing.first() { self.reword = m.clone(); } }
+                    ui.label(RichText::new(format!("{n} commit{} to push", if n == 1 { "" } else { "s" })).weak());
+                });
+            });
+            ui.add_space(6.0);
+        });
+        egui::CentralPanel::default().show_inside(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(if n == 1 { "Waiting to be pushed".to_string() } else { format!("{n} commits waiting to be pushed") }).strong());
+                if let Some((h, _)) = self.outgoing.first() { ui.label(RichText::new(h).monospace().color(BLUE)); }
+            });
+            ui.label(RichText::new("This is the message that goes up with the newest commit. Change it if you like.").small().weak());
+            let older: Vec<(String, String)> = self.outgoing.iter().skip(1).cloned().collect();
+            let editor_h = if older.is_empty() { ui.available_height() } else { (ui.available_height() * 0.6).max(120.0) };
+            egui::ScrollArea::vertical().id_salt("reword").max_height(editor_h).auto_shrink([false; 2]).show(ui, |ui| {
+                ui.add_sized([ui.available_width(), editor_h.max(80.0)], egui::TextEdit::multiline(&mut self.reword).font(egui::TextStyle::Monospace));
+            });
+            if !older.is_empty() {
+                ui.add_space(6.0);
+                ui.label(RichText::new("Also going up (already committed, shown as is):").small().weak());
+                egui::ScrollArea::vertical().id_salt("older").auto_shrink([false; 2]).show(ui, |ui| {
+                    for (h, m) in &older {
+                        let subj = m.lines().next().unwrap_or("");
+                        egui::CollapsingHeader::new(RichText::new(format!("{h}  {subj}"))).id_salt(h).show(ui, |ui| { ui.label(RichText::new(m).monospace().small()); });
+                    }
+                });
+            }
+        });
     }
 
     fn history_view(&mut self, ui: &mut egui::Ui, ahead: usize) {
