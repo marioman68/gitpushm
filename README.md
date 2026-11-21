@@ -1,48 +1,62 @@
-# ❖ Git Project Push Manager (`gitpushm`)
+# gitpushm: Git Project Push Manager
 
-A lightweight, mouse-friendly Terminal User Interface (TUI) for managing local Git repositories, staging changes, committing updates, and pushing directly to GitHub. Built entirely in Bash, it features a sleek purple/magenta design and dual-pane layout.
+A small desktop app that shows every project in your projects folder: which ones have uncommitted changes, which have commits waiting to be pushed, and which aren't git repos yet. Pick one, see what changed, get a commit message written for you, and push.
 
-## Features
+Version 3 is a rewrite in Rust (egui). The original Bash TUI and the Tkinter GUI are kept in `legacy/`.
 
-* **Interactive TUI:** Clean dual-pane dashboard to browse your `~/Projects` directory instantly.
-* **Full Mouse Support:** Click directly on any project row to select it, or click action buttons in the right pane.
-* **Repository Health Status:** Real-time indicators showing uncommitted changes (**`●`**), clean working trees (**`○`**), or uninitialized directories (**`○`** in red).
-* **Automated Git Initialization:** Automatically detects non-Git folders and prompts you to run `git init` and link your remote origin URL on the spot.
-* **Universal File Manager Integration:** Open any project folder directly in your system's default graphical file manager (`xdg-open`).
-* **Smart Commit & Push Workflows:** Custom commit message prompts with automatic branch tracking (`git push -u origin HEAD`).
+## What it does
 
-## Prerequisites
+- **Project list:** every folder in `~/Projects` with a status dot (orange = changes, blue = unpushed or behind, green = clean, grey = not a repo or no remote), branch, change count and ↑/↓ counts. It has a filter (Ctrl+F) and loads in parallel.
+- **Changes:** tick the files you want in the commit. Click a file to see its diff. Right-click a file to open it, copy its path, add it to `.gitignore`, stop tracking it, or discard its changes.
+- **Commit message generator:** the message is written from the ticked files and updates as you tick and untick them.
+  - It works out the kind of change (feat, docs, test, ci, build, deps, style, refactor, chore) and a scope from the shared folder.
+  - Source files are named before lock files and configs. Renames, deletions, version bumps (`chore(release): bump version to 1.2.0`) and whitespace-only edits (`style:`) are recognised.
+  - The subject is kept under 72 characters, with a body that lists every file and its +/- line counts.
+  - Conventional style can be turned off in File > Preferences.
+- **Safety:**
+  - Files that look like secrets (`.env`, keys, `credentials.json`, …) or are too big for GitHub (>50/100 MB) are marked ⚠ and left unticked.
+  - Force push uses `--force-with-lease` and asks first.
+  - Pull is fast-forward only by default, or rebase if you prefer.
+  - Git never stops to prompt for a password or editor: failures show in the Output panel with a plain explanation.
+- **Also:**
+  - **Branches:** switch branch, create a new one.
+  - **Commits:** amend the last commit, undo the last commit (keeps your changes), see the history (unpushed commits in blue).
+  - **Remotes and stash:** stash and restore, fetch all projects, set or change the remote, initialize a repository.
+  - **Open:** the folder, a terminal, or the project's GitHub/GitLab page.
+  - **Look:** dark/light/system theme. The project re-reads itself when you switch back to the window.
 
-* **Bash** (v4.0+)
-* **Git** client installed and configured with your GitHub credentials (SSH keys or personal access tokens).
-* **Xdg-utils:** Required for opening project folders in your desktop file manager.
-
-## Installation
-
-To install or update `gitpushm` locally in your user bin path:
+## Build and install
 
 ```bash
-# Clone the repository
-git clone [https://github.com/marioman68/gitpushm.git](https://github.com/marioman68/gitpushm.git)
-cd gitpushm
+cd ~/Projects/gitpushm
+cargo build --release
+cp target/release/gitpushm ~/.local/bin/gitpushm
+cp packaging/gitpushm.desktop ~/.local/share/applications/   # optional: app menu entry
+```
 
-# Make executable and copy to local bin
-chmod +x gitpushm
-cp gitpushm ~/.local/bin/gitpushm
+## Command line
 
-# Usage
+```
+gitpushm                      open the window
+gitpushm status               every project: branch, changes, ahead/behind
+gitpushm msg <project>        print the commit message it would write
+gitpushm push <project> [-m MESSAGE] [--dry-run]
+```
 
-Simply run the command from any terminal:
-Bash
+`push` from the command line refuses to commit files that look like secrets.
 
-gitpushm
+## Keyboard
 
-    Keyboard: Type the corresponding project number, or press a letter shortcut (p, o, s, r, q) in the Action Center.
+| Key | Action |
+|---|---|
+| Ctrl+Enter | Commit & push |
+| Ctrl+Shift+Enter | Commit only |
+| Ctrl+G | Generate message |
+| F5 | Refresh |
+| Ctrl+F | Filter projects |
+| Alt+↑ / Alt+↓ | Previous / next project |
+| Ctrl+1 / Ctrl+2 | Changes / History |
 
-    Mouse: Click on a project row in the left pane to manage it, or click any option on the right.
+## Settings
 
-# Configuration
-
-gitpushm automatically scans your local user directory located at:~/Projects/
-
-Note: This project was collaboratively built and refined using AI assistance.
+The projects folder lives in `~/.config/gitpushm.conf`, the same file the older versions used. The other preferences are in `~/.config/gitpushm/settings`.

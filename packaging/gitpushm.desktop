@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=gitpushm
+GenericName=Git Push Manager
+Comment=See every project, write commit messages, push
+Exec=gitpushm
+Icon=git
+Terminal=false
+Categories=Development;RevisionControl;
