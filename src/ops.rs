@@ -7,7 +7,48 @@ pub fn message(repo: &Path, st: &Status, chosen: &[Change], conventional: bool) 
     let ws = git::whitespace_only(repo, st.no_commits, chosen);
     let mut bump = None;
     for c in chosen.iter().filter(|c| matches!(commitmsg::category(&c.path), commitmsg::Cat::Build) && c.kind == Kind::Modified) { let (a, _) = git::added_removed_lines(repo, &c.path, st.no_commits); if let Some(v) = commitmsg::version_from_lines(&a) { bump = Some(v); break; } }
-    commitmsg::generate(&Input { changes: chosen, whitespace_only: &ws, version_bump: bump, conventional })
+    let syms = symbols(repo, st, chosen);
+    commitmsg::generate(&Input { changes: chosen, whitespace_only: &ws, version_bump: bump, conventional, symbols: &syms })
+}
+/// definitions added / changed / removed in each source file, read from the diff (and the hunk headers git puts the enclosing function in)
+pub fn symbols(repo: &Path, st: &Status, chosen: &[Change]) -> Vec<commitmsg::FileSymbols> {
+    let base = if st.no_commits { "4b825dc642cb6eb9a060e54bf8d69288fbee4904" } else { "HEAD" };
+    let mut out = vec![];
+    for c in chosen.iter().take(60) {
+        if c.binary || !matches!(commitmsg::category(&c.path), commitmsg::Cat::Source | commitmsg::Cat::Test) || c.size > 2_000_000 { continue; }
+        let text = if c.kind == Kind::Untracked {
+            std::fs::read_to_string(repo.join(&c.path)).map(|s| s.lines().map(|l| format!("+{l}\n")).collect::<String>()).unwrap_or_default()
+        } else {
+            let mut args = vec!["diff", "-U0", "-M", base, "--"]; if let Kind::Renamed(o) = &c.kind { args.push(o); } args.push(&c.path);
+            git::git(repo, &args).stdout
+        };
+        // the file as it is now, to find which function each edit sits in
+        let now: Vec<String> = if c.kind == Kind::Deleted { vec![] } else { std::fs::read_to_string(repo.join(&c.path)).map(|s| s.lines().map(String::from).collect()).unwrap_or_default() };
+        let enclosing = |line: usize| -> Option<String> { (0..line.min(now.len())).rev().take(400).find_map(|k| commitmsg::definition(&now[k])) };
+        let (mut added, mut removed, mut context): (Vec<String>, Vec<String>, Vec<String>) = (vec![], vec![], vec![]);
+        let push = |v: &mut Vec<String>, s: String| { if !v.contains(&s) { v.push(s); } };
+        // per hunk: definitions in the +/- lines are added/removed; a hunk with none edits whatever function it sits in
+        let mut hunk_start = 0usize; let mut hunk_has_def = false; let mut in_hunk = false;
+        let mut close = |start: usize, has_def: bool, ctx: &mut Vec<String>| { if !has_def { if let Some(d) = enclosing(start) { if !ctx.contains(&d) { ctx.push(d); } } } };
+        for l in text.lines() {
+            if l.starts_with("+++") || l.starts_with("---") { continue; }
+            if let Some(h) = l.strip_prefix("@@ ") {
+                if in_hunk { close(hunk_start, hunk_has_def, &mut context); }
+                // "@@ -a,b +c,d @@": new-file line c (1-based)
+                hunk_start = h.split_whitespace().find(|x| x.starts_with('+')).and_then(|x| x[1..].split(',').next()?.parse::<usize>().ok()).unwrap_or(0);
+                hunk_has_def = false; in_hunk = true; continue;
+            }
+            if let Some(a) = l.strip_prefix('+') { if let Some(d) = commitmsg::definition(a) { push(&mut added, d); hunk_has_def = true; } }
+            else if let Some(r) = l.strip_prefix('-') { if let Some(d) = commitmsg::definition(r) { push(&mut removed, d); hunk_has_def = true; } }
+        }
+        if in_hunk && c.kind != Kind::Untracked { close(hunk_start, hunk_has_def, &mut context); }
+        let changed: Vec<String> = added.iter().filter(|a| removed.contains(a)).cloned()
+            .chain(context.iter().filter(|x| !added.contains(x) && !removed.contains(x)).cloned()).collect();
+        let f = commitmsg::FileSymbols { path: c.path.clone(), added: added.iter().filter(|a| !removed.contains(a)).cloned().collect(),
+            removed: removed.iter().filter(|r| !added.contains(r)).cloned().collect(), changed };
+        if !(f.added.is_empty() && f.changed.is_empty() && f.removed.is_empty()) { out.push(f); }
+    }
+    out
 }
 /// stage exactly the chosen files (adds, edits, deletions and renames), then commit
 pub fn commit(repo: &Path, chosen: &[Change], all: bool, msg: &str, amend: bool, log: &mut Vec<String>) -> bool {

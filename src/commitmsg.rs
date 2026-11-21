@@ -20,7 +20,52 @@ pub fn category(path: &str) -> Cat {
     Cat::Source
 }
 
-pub struct Input<'a> { pub changes: &'a [Change], pub whitespace_only: &'a [String], pub version_bump: Option<String>, pub conventional: bool }
+pub struct Input<'a> { pub changes: &'a [Change], pub whitespace_only: &'a [String], pub version_bump: Option<String>, pub conventional: bool, pub symbols: &'a [FileSymbols] }
+
+/// what changed inside one file: definitions added, changed (edited body or signature) and removed
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct FileSymbols { pub path: String, pub added: Vec<String>, pub changed: Vec<String>, pub removed: Vec<String> }
+
+/// "fn parse", "class Store", "def load"… when a line defines something (Rust, Python, JS/TS, Go, shell, Ruby, Kotlin, Swift, Lua, PHP)
+pub fn definition(line: &str) -> Option<String> {
+    let mut s = line.trim_start();
+    // leading attributes / decorators on the same line: #[test] fn x, @Override fun y
+    while s.starts_with("#[") { match s.find(']') { Some(e) => s = s[e + 1..].trim_start(), None => break } }
+    // modifiers that can come before the keyword ("pub async fn", "export default class", "const fn"…)
+    const MODS: [&str; 20] = ["pub(crate) ", "pub(super) ", "pub ", "export ", "default ", "async ", "unsafe ", "extern \"C\" ", "static ", "private ", "public ", "protected ", "override ", "open ", "abstract ", "final ", "internal ", "suspend ", "inline ", "const fn "];
+    while let Some(m) = MODS.iter().find(|m| s.starts_with(*m)) { s = if *m == "const fn " { &s["const ".len()..] } else { &s[m.len()..] }; }
+    let ident = |r: &str| -> Option<String> { let n: String = r.trim_start().chars().take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '$').collect(); if n.is_empty() || n.chars().next().map_or(true, |c| c.is_ascii_digit()) { None } else { Some(n) } };
+    for (kw, label) in [("fn ", "fn"), ("struct ", "struct"), ("enum ", "enum"), ("trait ", "trait"), ("mod ", "mod"), ("macro_rules! ", "macro"), ("def ", "def"), ("class ", "class"),
+        ("function ", "function"), ("interface ", "interface"), ("fun ", "fun"), ("func ", "func"), ("type ", "type"), ("module ", "module"), ("local function ", "function")] {
+        if let Some(r) = s.strip_prefix(kw) {
+            // Go methods: func (r *T) Name(
+            let r = if kw == "func " && r.starts_with('(') { r.split_once(')').map(|x| x.1).unwrap_or(r) } else { r };
+            if kw == "type " && !(r.contains(" = ") || r.contains(" struct") || r.contains(" interface")) { return None; }
+            if kw == "mod " && r.trim_end().ends_with(';') { return None; }
+            return ident(r).map(|n| format!("{label} {n}"));
+        }
+    }
+    // JS/TS arrow functions: const name = (…) => / const name = async (…) =>
+    for kw in ["const ", "let ", "var "] {
+        if let Some(r) = s.strip_prefix(kw) {
+            let Some(n) = ident(r) else { continue };
+            let after = r.trim_start()[n.len()..].trim_start();
+            let Some(rhs) = after.strip_prefix('=').map(str::trim_start) else { continue };
+            if rhs.starts_with("=") { continue; }   // ==, =>
+            // a real arrow function: (params) => / async (params) => / x => (the "=>" right after the parameter list)
+            let r2 = rhs.strip_prefix("async").map(str::trim_start).unwrap_or(rhs);
+            let arrow = if r2.starts_with('(') {
+                let mut depth = 0; let mut end = None;
+                for (k, ch) in r2.char_indices() { match ch { '(' => depth += 1, ')' => { depth -= 1; if depth == 0 { end = Some(k); break; } } _ => {} } }
+                end.map_or(false, |e| { let rest = r2[e + 1..].trim_start(); rest.starts_with("=>") || (rest.starts_with(':') && rest.contains("=>") && !rest.contains(';')) })
+            } else { r2.split_once("=>").map_or(false, |(p, _)| { let p = p.trim(); !p.is_empty() && p.chars().all(|c| c.is_alphanumeric() || c == '_') }) };
+            if arrow || rhs.starts_with("function") { return Some(format!("function {n}")); }
+        }
+    }
+    // shell: name() {
+    if let Some(i) = s.find("() {") { let n = &s[..i]; if !n.is_empty() && n.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-') { return Some(format!("function {n}")); } }
+    None
+}
 
 pub fn generate(i: &Input) -> String {
     let ch: Vec<&Change> = i.changes.iter().collect();
@@ -85,6 +130,20 @@ pub fn generate(i: &Input) -> String {
         let p = match &c.kind { Kind::Renamed(o) => format!("{o} -> {}", c.path), _ => c.path.clone() };
         if n.is_empty() { format!("- {p}") } else { format!("- {p} ({n})") }
     };
+    let syms: Vec<&FileSymbols> = i.symbols.iter().filter(|f| !(f.added.is_empty() && f.changed.is_empty() && f.removed.is_empty())).collect();
+    if !syms.is_empty() {
+        body.push("What changed:".into());
+        let list = |v: &[String]| -> String { if v.len() > 4 { format!("{} and {} more", v[..4].join(", "), v.len() - 4) } else { v.join(", ") } };
+        for f in syms.iter().take(12) {
+            let mut parts = vec![];
+            if !f.added.is_empty() { parts.push(format!("added {}", list(&f.added))); }
+            if !f.changed.is_empty() { parts.push(format!("changed {}", list(&f.changed))); }
+            if !f.removed.is_empty() { parts.push(format!("removed {}", list(&f.removed))); }
+            body.push(format!("- {}: {}", f.path.rsplit('/').next().unwrap_or(&f.path), parts.join("; ")));
+        }
+        if syms.len() > 12 { body.push(format!("... and {} more files", syms.len() - 12)); }
+        body.push(String::new());
+    }
     let mut shown = 0;
     for (title, list) in [("New", &new), ("Changed", &edited), ("Renamed", &moved), ("Removed", &gone)] {
         if list.is_empty() { continue; }
@@ -95,8 +154,17 @@ pub fn generate(i: &Input) -> String {
     if shown > 25 { body.push(format!("... and {} more", shown - 25)); }
     body.push(String::new());
     body.push(format!("{} file{} changed, +{} -{}", ch.len(), if ch.len() == 1 { "" } else { "s" }, adds, dels));
-    if ch.len() == 1 && body.len() <= 4 { return subject; }   // a one-file change needs no body
+    if ch.len() == 1 && syms.is_empty() && body.len() <= 4 { return subject; }   // a one-file change with nothing to explain needs no body
     format!("{subject}\n\n{}", body.join("\n"))
+}
+
+/// the description part of a generated message (everything after the subject)
+pub fn body(msg: &str) -> Option<&str> { msg.split_once("\n\n").map(|(_, b)| b.trim()).filter(|b| !b.is_empty()) }
+/// a message the user typed that is only a summary line gets the generated description added under it
+pub fn with_description(typed: &str, generated: &str) -> String {
+    let t = typed.trim();
+    if t.contains('\n') { return t.to_string(); }
+    match body(generated) { Some(b) => format!("{t}\n\n{b}"), None => t.to_string() }
 }
 
 fn rank(c: Cat, path: &str) -> u8 {
@@ -144,15 +212,15 @@ pub fn risky(c: &Change) -> Option<String> {
 mod tests {
     use super::*;
     fn c(p: &str, k: Kind, a: u32, d: u32) -> Change { Change { path: p.into(), kind: k, staged: false, unstaged: true, adds: a, dels: d, binary: false, size: 10 } }
-    fn g(ch: &[Change]) -> String { generate(&Input { changes: ch, whitespace_only: &[], version_bump: None, conventional: true }) }
+    fn g(ch: &[Change]) -> String { generate(&Input { changes: ch, whitespace_only: &[], version_bump: None, conventional: true, symbols: &[] }) }
     fn subj(s: &str) -> String { s.lines().next().unwrap().to_string() }
     #[test] fn docs_only() { assert_eq!(subj(&g(&[c("README.md", Kind::Modified, 4, 1)])), "docs: update README.md"); }
     #[test] fn new_source_is_feat_with_scope() { assert_eq!(subj(&g(&[c("core/src/build.rs", Kind::Untracked, 200, 0), c("core/src/pick.rs", Kind::Untracked, 80, 0), c("core/src/lib.rs", Kind::Modified, 2, 0)])), "feat(core): add build.rs and pick.rs, update lib.rs"); }
     #[test] fn deps() { assert_eq!(subj(&g(&[c("Cargo.lock", Kind::Modified, 40, 12)])), "build(deps): update Cargo.lock"); }
     #[test] fn rename_refactor() { assert_eq!(subj(&g(&[c("src/new_name.rs", Kind::Renamed("src/old_name.rs".into()), 0, 0)])), "refactor: rename old_name.rs to new_name.rs"); }
-    #[test] fn whitespace() { let ch = [c("src/a.rs", Kind::Modified, 5, 5)]; let s = generate(&Input { changes: &ch, whitespace_only: &["src/a.rs".into()], version_bump: None, conventional: true }); assert_eq!(subj(&s), "style: tidy whitespace in a.rs"); }
-    #[test] fn version() { let ch = [c("Cargo.toml", Kind::Modified, 1, 1), c("Cargo.lock", Kind::Modified, 1, 1)]; let s = generate(&Input { changes: &ch, whitespace_only: &[], version_bump: Some("3.0.0".into()), conventional: true }); assert_eq!(subj(&s), "chore(release): bump version to 3.0.0"); }
-    #[test] fn plain_mode() { let ch = [c("src/app.rs", Kind::Modified, 10, 2)]; let s = generate(&Input { changes: &ch, whitespace_only: &[], version_bump: None, conventional: false }); assert_eq!(s, "Update app.rs"); }
+    #[test] fn whitespace() { let ch = [c("src/a.rs", Kind::Modified, 5, 5)]; let s = generate(&Input { changes: &ch, whitespace_only: &["src/a.rs".into()], version_bump: None, conventional: true, symbols: &[] }); assert_eq!(subj(&s), "style: tidy whitespace in a.rs"); }
+    #[test] fn version() { let ch = [c("Cargo.toml", Kind::Modified, 1, 1), c("Cargo.lock", Kind::Modified, 1, 1)]; let s = generate(&Input { changes: &ch, whitespace_only: &[], version_bump: Some("3.0.0".into()), conventional: true, symbols: &[] }); assert_eq!(subj(&s), "chore(release): bump version to 3.0.0"); }
+    #[test] fn plain_mode() { let ch = [c("src/app.rs", Kind::Modified, 10, 2)]; let s = generate(&Input { changes: &ch, whitespace_only: &[], version_bump: None, conventional: false, symbols: &[] }); assert_eq!(s, "Update app.rs"); }
     #[test] fn body_and_length() {
         let ch: Vec<Change> = (0..40).map(|k| c(&format!("src/module_with_long_name_{k}.rs"), Kind::Modified, k, 1)).collect();
         let s = g(&ch); let first = subj(&s);
@@ -160,6 +228,23 @@ mod tests {
     }
     #[test] fn source_named_first() { let ch = [c("Cargo.lock", Kind::Untracked, 4000, 0), c(".gitignore", Kind::Untracked, 1, 0), c("src/app.rs", Kind::Untracked, 600, 0), c("src/git.rs", Kind::Untracked, 150, 0), c("README.md", Kind::Untracked, 20, 0)]; assert_eq!(subj(&g(&ch)), "feat: add app.rs, git.rs and 3 more"); }
     #[test] fn long_drops_clauses() { let ch = [c("src/app.rs", Kind::Untracked, 600, 0), c("src/commitmsg.rs", Kind::Untracked, 160, 0), c("src/config.rs", Kind::Untracked, 20, 0), c("README.md", Kind::Modified, 40, 30), c("legacy/gitpushm-gui.py", Kind::Renamed("gitpushm-gui.py".into()), 0, 0), c("legacy/gitpushm", Kind::Renamed("gitpushm".into()), 0, 0)]; let s = subj(&g(&ch)); assert_eq!(s, "feat: add app.rs, commitmsg.rs and 1 more, update README.md"); }
+    #[test] fn definitions() {
+        for (l, want) in [("pub fn parse(x: u8) -> u8 {", Some("fn parse")), ("    pub(crate) async fn load() {", Some("fn load")), ("impl Foo {", None), ("pub struct Store {", Some("struct Store")),
+            ("def run(self):", Some("def run")), ("class Tray(QSystemTrayIcon):", Some("class Tray")), ("export async function fetchAll() {", Some("function fetchAll")),
+            ("const onClick = (e) => {", Some("function onClick")), ("let m = match x { Some(t) => t, None => 0 };", None), ("let arrow = (a || b) && s.contains(\"=>\");", None), ("#[test] fn quoting() { }", Some("fn quoting")), ("const add = async (a, b) => a + b;", Some("function add")), ("const sq = x => x * x;", Some("function sq")), ("const total = items.length;", None), ("func (s *Server) Start() error {", Some("func Start")), ("install_deps() {", Some("function install_deps")),
+            ("let x = 5;", None), ("mod tests;", None), ("type Props = {", Some("type Props")), ("pub const fn new() -> Self {", Some("fn new"))] {
+            assert_eq!(definition(l).as_deref(), want, "{l}");
+        }
+    }
+    #[test] fn description_section() {
+        let ch = [c("src/app.rs", Kind::Modified, 30, 4)];
+        let sy = [FileSymbols { path: "src/app.rs".into(), added: vec!["fn do_commit".into()], changed: vec!["fn run".into()], removed: vec![] }];
+        let s = generate(&Input { changes: &ch, whitespace_only: &[], version_bump: None, conventional: true, symbols: &sy });
+        assert!(s.contains("What changed:\n- app.rs: added fn do_commit; changed fn run"), "{s}");
+        assert_eq!(with_description("Fix the push button", &s).lines().next(), Some("Fix the push button"));
+        assert!(with_description("Fix the push button", &s).contains("What changed:"));
+        assert_eq!(with_description("Line one\n\nmy own details", &s), "Line one\n\nmy own details");
+    }
     #[test] fn removal() { assert_eq!(subj(&g(&[c("old.py", Kind::Deleted, 0, 30)])), "chore: remove old.py"); }
     #[test] fn version_lines() { assert_eq!(version_from_lines(&["version = \"1.4.0\"".into()]).as_deref(), Some("1.4.0")); assert_eq!(version_from_lines(&["  \"version\": \"2.0.1\",".into()]).as_deref(), Some("2.0.1")); }
     #[test] fn secrets() { assert!(risky(&c(".env", Kind::Untracked, 1, 0)).is_some()); assert!(risky(&c(".env.example", Kind::Untracked, 1, 0)).is_none()); assert!(risky(&c("keys/server.pem", Kind::Untracked, 1, 0)).is_some()); }

@@ -126,8 +126,13 @@ impl App {
     }
     fn do_commit(&mut self, ctx: &egui::Context, push: bool) {
         let Some(r) = self.cur() else { return }; let Some(st) = &r.status else { return };
-        let chosen = self.chosen(); let msg = self.msg.trim().to_string(); let amend = self.amend;
-        if msg.is_empty() || (chosen.is_empty() && !amend) { return; }
+        let chosen = self.chosen(); let amend = self.amend;
+        if chosen.is_empty() && !amend { return; }
+        // empty box: write the whole message; a typed one-line summary: add the change description under it
+        let generated = if chosen.is_empty() { String::new() } else { ops::message(&r.path, st, &chosen, self.cfg.conventional) };
+        let typed = self.msg.trim();
+        let msg = if typed.is_empty() { generated.clone() } else if self.cfg.describe && typed != generated.trim() { commitmsg::with_description(typed, &generated) } else { typed.to_string() };
+        if msg.trim().is_empty() { return; }
         if push && r.remote.is_none() { self.dialog = Some(Dialog::Remote(String::new())); return; }
         let all = chosen.len() == st.changes.len();
         self.job(ctx, if push { "Commit & push" } else { "Commit" }, move |p, log| ops::commit(p, &chosen, all, &msg, amend, log) && (!push || ops::push(p, false, log)));
@@ -307,6 +312,7 @@ impl App {
                         let mut ch = false;
                         ch |= ui.checkbox(&mut self.cfg.conventional, "Conventional commit style (feat:, fix:, docs: …)").changed();
                         ch |= ui.checkbox(&mut self.cfg.autofill, "Write the message automatically").changed();
+                        ch |= ui.checkbox(&mut self.cfg.describe, "Add a description of the changes under a summary I type").changed();
                         ch |= ui.checkbox(&mut self.cfg.fetch_on_start, "Fetch all projects at start").changed();
                         ch |= ui.checkbox(&mut self.cfg.pull_rebase, "Pull with rebase").changed();
                         if ch { acts.push(Act::SaveCfg); }
@@ -490,7 +496,7 @@ impl App {
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| { if ui.small_button("Generate").on_hover_text("Write a message from the ticked files (Ctrl+G)").clicked() { acts.push(Act::Generate); } });
             });
             egui::ScrollArea::vertical().id_salt("msgscroll").max_height(118.0).min_scrolled_height(118.0).show(ui, |ui| {
-                ui.add(egui::TextEdit::multiline(&mut self.msg).desired_rows(6).desired_width(f32::INFINITY).font(egui::TextStyle::Monospace).hint_text("Summary on the first line, details below"));
+                ui.add(egui::TextEdit::multiline(&mut self.msg).desired_rows(6).desired_width(f32::INFINITY).font(egui::TextStyle::Monospace).hint_text("Leave empty and it is written for you — or type a summary and the change description is added under it"));
             });
             let chosen = self.chosen();
             let risky: Vec<String> = chosen.iter().filter(|c| commitmsg::risky(c).is_some()).map(|c| c.path.clone()).collect();
@@ -499,7 +505,7 @@ impl App {
             ui.horizontal(|ui| {
                 ui.checkbox(&mut self.amend, "Amend last commit").on_hover_text("Fold these changes (and the message) into the previous commit");
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    let can = idle && !self.msg.trim().is_empty() && (!chosen.is_empty() || self.amend);
+                    let can = idle && (!chosen.is_empty() || (self.amend && !self.msg.trim().is_empty()));
                     if ui.add_enabled(can, Button::new(RichText::new("Commit & Push").color(Color32::WHITE).strong()).fill(ACCENT).min_size(Vec2::new(0.0, 24.0))).on_hover_text("Ctrl+Enter").clicked() { acts.push(Act::Commit(true)); }
                     if ui.add_enabled(can, Button::new("Commit").min_size(Vec2::new(0.0, 24.0))).on_hover_text("Commit without pushing (Ctrl+Shift+Enter)").clicked() { acts.push(Act::Commit(false)); }
                     ui.label(RichText::new(format!("{} of {} files", chosen.len(), st.changes.len())).weak());

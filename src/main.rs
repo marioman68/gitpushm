@@ -33,7 +33,8 @@ fn main() {
         Some("msg") if args.len() >= 2 => { let p = find(&args[1]); let r = scan::load(&p); match r.status { Some(st) => println!("{}", ops::message(&p, &st, &st.changes, cfg.conventional)), None => eprintln!("{} is not a git repository", p.display()) } }
         Some("push") if args.len() >= 2 => {
             let p = find(&args[1]); let r = scan::load(&p); let Some(st) = r.status else { eprintln!("{} is not a git repository", p.display()); std::process::exit(1) };
-            let m = args.iter().position(|a| a == "-m").and_then(|i| args.get(i + 1)).cloned().unwrap_or_else(|| ops::message(&p, &st, &st.changes, cfg.conventional));
+            let generated = ops::message(&p, &st, &st.changes, cfg.conventional);
+            let m = match args.iter().position(|a| a == "-m").and_then(|i| args.get(i + 1)) { Some(t) if cfg.describe => commitmsg::with_description(t, &generated), Some(t) => t.clone(), None => generated };
             let risky: Vec<String> = st.changes.iter().filter_map(|c| commitmsg::risky(c).map(|w| format!("  {} ({w})", c.path))).collect();
             if !risky.is_empty() { eprintln!("Not committing, these look risky:\n{}\nCommit them yourself if you mean it.", risky.join("\n")); std::process::exit(2); }
             if args.iter().any(|a| a == "--dry-run") { println!("{m}"); return; }
