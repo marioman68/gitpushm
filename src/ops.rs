@@ -80,7 +80,9 @@ pub fn push(repo: &Path, force: bool, log: &mut Vec<String>) -> bool {
         let l = t.to_lowercase();
         log.push(if l.contains("no such remote") || l.contains("does not appear to be a git repository") { "There is no 'origin' remote yet: use Repository > Set remote.".into() }
             else if l.contains("rejected") || l.contains("fetch first") || l.contains("non-fast-forward") { "The remote has commits you don't have. Pull first (or force push from the Repository menu if you mean to overwrite).".into() }
-            else if l.contains("permission denied") || l.contains("authentication") || l.contains("could not read username") { "The remote refused the login. Check your SSH key or token.".into() }
+            else if l.contains("could not read username") || (l.contains("authentication") && !git::is_ssh(&git::remote_url(repo).unwrap_or_default())) {
+                "This remote uses an HTTPS address, which needs a username and token. To push with your SSH key, right-click the address at the top and choose Switch to SSH (or Repository > Change remote…).".into() }
+            else if l.contains("permission denied") || l.contains("authentication") { "The remote refused the login. Check your SSH key or token.".into() }
             else { "Push failed.".into() });
     }
     o.ok

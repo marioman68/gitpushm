@@ -140,9 +140,38 @@ pub fn web_url(remote: &str) -> Option<String> {
     None
 }
 
+/// is this an SSH remote address (git@host:path or ssh://...)?
+pub fn is_ssh(remote: &str) -> bool { let r = remote.trim(); r.starts_with("git@") || r.starts_with("ssh://") }
+/// the SSH form of an HTTPS address: https://github.com/a/b(.git) -> git@github.com:a/b.git
+pub fn to_ssh(remote: &str) -> Option<String> {
+    let r = remote.trim();
+    if is_ssh(r) { return Some(r.to_string()); }
+    let rest = r.strip_prefix("https://").or_else(|| r.strip_prefix("http://"))?;
+    let rest = rest.split_once('@').map_or(rest, |(_, after)| after); // drop any user:token@
+    let (host, path) = rest.split_once('/')?;
+    let path = path.trim_end_matches('/'); if host.is_empty() || path.is_empty() { return None; }
+    Some(format!("git@{host}:{}.git", path.trim_end_matches(".git")))
+}
+/// the HTTPS form of an SSH address: git@github.com:a/b.git -> https://github.com/a/b.git
+pub fn to_https(remote: &str) -> Option<String> {
+    let r = remote.trim();
+    if !is_ssh(r) { return if r.starts_with("https://") || r.starts_with("http://") { Some(r.to_string()) } else { None }; }
+    let web = web_url(r)?;
+    Some(format!("{web}.git"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test] fn ssh_https_switch() {
+        assert_eq!(to_ssh("https://github.com/marioman68/df-mod-load-order.git").as_deref(), Some("git@github.com:marioman68/df-mod-load-order.git"));
+        assert_eq!(to_ssh("https://github.com/a/b").as_deref(), Some("git@github.com:a/b.git"));
+        assert_eq!(to_ssh("https://user:tok@gitlab.com/g/sub/p.git/").as_deref(), Some("git@gitlab.com:g/sub/p.git"));
+        assert_eq!(to_https("git@github.com:a/b.git").as_deref(), Some("https://github.com/a/b.git"));
+        assert_eq!(to_ssh("git@github.com:a/b.git").as_deref(), Some("git@github.com:a/b.git"));
+        assert!(is_ssh("ssh://git@host:2222/a/b.git") && !is_ssh("https://x/y"));
+        assert_eq!(to_ssh("/local/path"), None);
+    }
     #[test] fn web_urls() {
         assert_eq!(web_url("git@github.com:marioman68/gitpushm.git").as_deref(), Some("https://github.com/marioman68/gitpushm"));
         assert_eq!(web_url("https://github.com/a/b.git").as_deref(), Some("https://github.com/a/b"));

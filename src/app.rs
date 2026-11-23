@@ -447,7 +447,18 @@ impl App {
                             }).response.on_hover_text("Switch branch");
                         }
                         match &r.remote {
-                            Some(u) => { let web = git::web_url(u); let l = ui.add(egui::Label::new(RichText::new(u).weak()).sense(Sense::click())); if web.is_some() { if l.on_hover_text("Open on the web").clicked() { acts.push(Act::Web); } } }
+                            Some(u) => {
+                                let web = git::web_url(u);
+                                let l = ui.add(egui::Label::new(RichText::new(u).weak()).sense(Sense::click()));
+                                let l = l.on_hover_text(if web.is_some() { "Click to open on the web. Right-click to change the address" } else { "Right-click to change the address" });
+                                if l.clicked() && web.is_some() { acts.push(Act::Web); }
+                                l.context_menu(|ui| {
+                                    if ui.button("Change remote…").clicked() { acts.push(Act::Open(Dialog::Remote(u.clone()))); ui.close_menu(); }
+                                    let other = if git::is_ssh(u) { git::to_https(u).map(|x| ("Switch to HTTPS", x)) } else { git::to_ssh(u).map(|x| ("Switch to SSH", x)) };
+                                    if let Some((label, x)) = other { if ui.add_enabled(idle, Button::new(label)).on_hover_text(&x).clicked() { acts.push(Act::DoRemote(x)); ui.close_menu(); } }
+                                    if ui.button("Copy address").clicked() { ui.ctx().copy_text(u.clone()); ui.close_menu(); }
+                                });
+                            }
                             None if r.is_git => { ui.label(RichText::new("No remote").color(ORANGE)); if ui.small_button("Set remote…").clicked() { acts.push(Act::Open(Dialog::Remote(String::new()))); } }
                             None => {}
                         }
@@ -676,6 +687,15 @@ impl App {
                     let te = ui.add(egui::TextEdit::singleline(url).desired_width(f32::INFINITY).hint_text(format!("git@github.com:you/{name}.git")));
                     if !te.has_focus() && url.is_empty() { te.request_focus(); }
                     ui.label(RichText::new("Create the empty repository on GitHub first, then paste its SSH or HTTPS address.").weak());
+                    // which kind it is, and a one-click switch to the other
+                    if !url.trim().is_empty() {
+                        ui.horizontal(|ui| {
+                            let ssh = git::is_ssh(url);
+                            ui.label(RichText::new(if ssh { "SSH address (uses your SSH key)" } else { "HTTPS address (needs a username and token to push)" }).small());
+                            let other = if ssh { git::to_https(url).map(|x| ("Switch to HTTPS", x)) } else { git::to_ssh(url).map(|x| ("Switch to SSH", x)) };
+                            if let Some((label, x)) = other { if ui.small_button(label).on_hover_text(&x).clicked() { *url = x; } }
+                        });
+                    }
                     let ok = !url.trim().is_empty() && !url.trim().contains(' ');
                     let (go, no) = buttons(ui, "Save", false, ok); if go { acts.push(Act::DoRemote(url.clone())); } close = go || no;
                 }
