@@ -21,7 +21,10 @@ fn main() {
     let find = |n: &str| { let p = std::path::PathBuf::from(n); if p.join(".git").exists() { p } else { cfg.projects.join(n) } };
     match args.first().map(|s| s.as_str()) {
         None => {
-            let opts = eframe::NativeOptions { viewport: eframe::egui::ViewportBuilder::default().with_inner_size([1180.0, 760.0]).with_min_inner_size([860.0, 520.0]).with_title("gitpushm"), ..Default::default() };
+            // window icon (built into the binary) and app id, so the taskbar matches the launcher entry
+            let mut viewport = eframe::egui::ViewportBuilder::default().with_inner_size([1180.0, 760.0]).with_min_inner_size([860.0, 520.0]).with_title("gitpushm").with_app_id("gitpushm");
+            if let Ok(icon) = eframe::icon_data::from_png_bytes(include_bytes!("../assets/icon-256.png")) { viewport = viewport.with_icon(std::sync::Arc::new(icon)); }
+            let opts = eframe::NativeOptions { viewport, ..Default::default() };
             let _ = eframe::run_native("gitpushm", opts, Box::new(move |cc| Ok(Box::new(app::App::new(cc, cfg)))));
         }
         Some("status") => {

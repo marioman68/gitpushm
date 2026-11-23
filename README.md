@@ -32,6 +32,7 @@ cd ~/Projects/gitpushm
 cargo build --release
 cp target/release/gitpushm ~/.local/bin/gitpushm
 cp packaging/gitpushm.desktop ~/.local/share/applications/   # optional: app menu entry
+for s in 32 48 64 128 256 512; do mkdir -p ~/.local/share/icons/hicolor/${s}x${s}/apps; cp assets/icon-$s.png ~/.local/share/icons/hicolor/${s}x${s}/apps/gitpushm.png; done   # app icon
 ```
 
 ## Command line
